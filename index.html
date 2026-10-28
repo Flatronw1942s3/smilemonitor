@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smile Monitor — Тренажер и Трекер Улыбки</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Face API (современная поддерживаемая сборка Vladmandic) -->
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .video-mirror {
+      transform: scaleX(-1);
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.05); opacity: 0.4; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .pulse-glow {
+      animation: pulse-ring 2s infinite ease-in-out;
+    }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-6px); }
+      40%, 80% { transform: translateX(6px); }
+    }
+    .shake-anim {
+      animation: shake 0.4s ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-amber-500 selection:text-black">
+
+  <!-- Шапка -->
+  <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-yellow-300 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/20 text-xl font-bold">
+          😊
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            Smile Monitor
+            <span class="text-[10px] uppercase font-semibold tracking-wider bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">AI Live</span>
+          </h1>
+          <p class="text-xs text-slate-400">Держи улыбку пока работаешь за ПК</p>
+        </div>
+      </div>
+
+      <!-- Быстрые действия / Статус -->
+      <div class="flex items-center space-x-2">
+        <button id="pipBtn" title="Режим Картинка-в-Картинке" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors border border-slate-700/60">
+          <i data-lucide="picture-in-picture-2" class="w-4 h-4"></i>
+          <span>Мини-окно (PiP)</span>
+        </button>
+
+        <button id="toggleSoundBtn" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors border border-slate-700/60">
+          <i id="soundIcon" data-lucide="volume-2" class="w-4 h-4 text-emerald-400"></i>
+          <span id="soundText">Звук: Вкл</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Основной контент -->
+  <main class="flex-1 max-w-6xl mx-auto w-full px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Левая колонка: Камера + Оверлеи -->
+    <section class="lg:col-span-7 flex flex-col space-y-4">
+      <div class="relative w-full aspect-[4/3] sm:aspect-video bg-slate-900 rounded-3xl overflow-hidden border border-slate-800/80 shadow-2xl flex items-center justify-center group" id="videoWrapper">
+        
+        <!-- Заглушка до запуска -->
+        <div id="startPrompt" class="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 text-center bg-slate-900/90 backdrop-blur-sm">
+          <div class="w-20 h-20 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-4xl mb-4 pulse-glow">
+            😁
+          </div>
+          <h2 class="text-xl font-bold text-white mb-2">Включите камеру для старта</h2>
+          <p class="text-xs sm:text-sm text-slate-400 max-w-sm mb-6">
+            Нейросеть прямо в браузере определит вашу улыбку и напомнит звуком, когда лицо станет слишком серьезным.
+          </p>
+          <button id="startCamBtn" class="px-6 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-slate-950 font-bold shadow-lg shadow-amber-500/25 transition-all transform active:scale-95 flex items-center gap-2">
+            <i data-lucide="camera" class="w-5 h-5"></i>
+            <span>Включить камеру</span>
+          </button>
+          <p id="modelStatusText" class="mt-4 text-xs text-slate-400 flex items-center gap-1.5">
+            <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin hidden" id="modelSpinner"></i>
+            <span id="modelStatusDesc">Загрузка AI моделей...</span>
+          </p>
+        </div>
+
+        <!-- Видеопоток -->
+        <video id="webcam" autoplay playsinline muted class="w-full h-full object-cover video-mirror"></video>
+        <!-- Холст для меток лица -->
+        <canvas id="overlayCanvas" class="absolute inset-0 w-full h-full pointer-events-none video-mirror"></canvas>
+
+        <!-- Всплывающий баннер тревоги "УЛЫБНИСЬ!" -->
+        <div id="alertBanner" class="absolute top-6 left-1/2 -translate-x-1/2 z-30 transition-all duration-300 opacity-0 pointer-events-none transform -translate-y-4">
+          <div class="px-5 py-3 rounded-2xl bg-rose-600/95 backdrop-blur-md border border-rose-400 text-white font-extrabold shadow-2xl flex items-center gap-3">
+            <span class="text-2xl animate-bounce">⚠️</span>
+            <div>
+              <p class="text-sm uppercase tracking-wider font-black">Улыбнись!</p>
+              <p class="text-xs text-rose-100 font-normal">Слишком серьезное лицо 🙃</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Плавающий бейдж статуса в углу экрана -->
+        <div class="absolute bottom-4 left-4 z-20 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-700/60 text-xs font-semibold">
+          <span id="statusIndicatorDot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+          <span id="statusLabel" class="text-slate-300">Ожидание камеры...</span>
+        </div>
+
+        <!-- Индикатор текущего процента улыбки -->
+        <div class="absolute bottom-4 right-4 z-20 px-3.5 py-1.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-700/60 flex items-center gap-2 text-xs">
+          <span class="text-slate-400">Улыбка:</span>
+          <span id="smileScoreBadge" class="font-bold text-amber-400 font-mono text-sm">0%</span>
+        </div>
+      </div>
+
+      <!-- Живая шкала Улыбки -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-sm">
+        <div class="flex justify-between items-center text-xs font-medium mb-2">
+          <span class="text-slate-400 flex items-center gap-1.5">
+            <i data-lucide="sparkles" class="w-4 h-4 text-amber-400"></i>
+            Индекс улыбки в реальном времени
+          </span>
+          <span id="targetThresholdText" class="text-slate-400 font-mono">Цель: ≥ 55%</span>
+        </div>
+        <div class="w-full h-3.5 bg-slate-800 rounded-full overflow-hidden relative">
+          <!-- Порог (маркер цели) -->
+          <div id="thresholdMarker" class="absolute top-0 bottom-0 w-0.5 bg-yellow-400 z-10" style="left: 55%;" title="Порог срабатывания"></div>
+          <!-- Заполнение шкалы -->
+          <div id="liveSmileBar" class="h-full bg-gradient-to-r from-orange-500 via-amber-400 to-emerald-400 w-0 transition-all duration-100 ease-out"></div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Правая колонка: Статистика, Настройки и Советы -->
+    <section class="lg:col-span-5 flex flex-col space-y-5">
+
+      <!-- Статистика сессии -->
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col">
+          <span class="text-xs text-slate-400 font-medium flex items-center gap-1">
+            <i data-lucide="flame" class="w-3.5 h-3.5 text-amber-500"></i>
+            Текущая серия
+          </span>
+          <div class="mt-2 flex items-baseline gap-1">
+            <span id="streakSeconds" class="text-2xl font-black text-amber-400 font-mono">0</span>
+            <span class="text-xs text-slate-500">сек</span>
+          </div>
+          <span class="text-[11px] text-slate-500 mt-1">подряд с улыбкой</span>
+        </div>
+
+        <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col">
+          <span class="text-xs text-slate-400 font-medium flex items-center gap-1">
+            <i data-lucide="clock" class="w-3.5 h-3.5 text-emerald-400"></i>
+            Всего улыбался
+          </span>
+          <div class="mt-2 flex items-baseline gap-1">
+            <span id="totalSmiledTime" class="text-2xl font-black text-emerald-400 font-mono">0:00</span>
+          </div>
+          <span class="text-[11px] text-slate-500 mt-1">за текущую сессию</span>
+        </div>
+      </div>
+
+      <!-- Панель настроек -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-3xl p-5 space-y-4">
+        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+          <i data-lucide="sliders" class="w-4 h-4 text-amber-400"></i>
+          Настройки чувствительности
+        </h3>
+
+        <!-- Чувствительность порога -->
+        <div class="space-y-1.5">
+          <div class="flex justify-between text-xs">
+            <label for="thresholdInput" class="text-slate-300">Порог улыбки (%):</label>
+            <span id="thresholdVal" class="text-amber-400 font-bold font-mono">55%</span>
+          </div>
+          <input type="range" id="thresholdInput" min="25" max="85" value="55" class="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg">
+          <p class="text-[11px] text-slate-500">Чем ниже, тем легче засчитывается даже легкая полуулыбка.</p>
+        </div>
+
+        <!-- Задержка до предупреждения -->
+        <div class="space-y-1.5 pt-2 border-t border-slate-800/80">
+          <div class="flex justify-between text-xs">
+            <label for="delayInput" class="text-slate-300">Задержка тревоги (сек):</label>
+            <span id="delayVal" class="text-amber-400 font-bold font-mono">2.5 с</span>
+          </div>
+          <input type="range" id="delayInput" min="1" max="6" step="0.5" value="2.5" class="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg">
+          <p class="text-[11px] text-slate-500">Время без улыбки, прежде чем прозвучит сигнал (чтобы не пищало при обычном моргании).</p>
+        </div>
+
+        <!-- Громкость звука -->
+        <div class="space-y-1.5 pt-2 border-t border-slate-800/80">
+          <div class="flex justify-between text-xs">
+            <label for="volumeInput" class="text-slate-300">Громкость звука:</label>
+            <span id="volumeVal" class="text-amber-400 font-bold font-mono">70%</span>
+          </div>
+          <input type="range" id="volumeInput" min="0" max="100" value="70" class="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg">
+        </div>
+
+        <!-- Переключатели (Чекбоксы) -->
+        <div class="pt-3 border-t border-slate-800/80 space-y-2">
+          <label class="flex items-center justify-between cursor-pointer p-2 rounded-xl hover:bg-slate-800/40 transition">
+            <span class="text-xs text-slate-300 flex items-center gap-2">
+              <i data-lucide="bell" class="w-4 h-4 text-indigo-400"></i>
+              Push-уведомления браузера
+            </span>
+            <input type="checkbox" id="notificationToggle" class="accent-amber-500 w-4 h-4 cursor-pointer">
+          </label>
+
+          <label class="flex items-center justify-between cursor-pointer p-2 rounded-xl hover:bg-slate-800/40 transition">
+            <span class="text-xs text-slate-300 flex items-center gap-2">
+              <i data-lucide="scan-face" class="w-4 h-4 text-emerald-400"></i>
+              Отрисовка рамки лица на видео
+            </span>
+            <input type="checkbox" id="meshToggle" checked class="accent-amber-500 w-4 h-4 cursor-pointer">
+          </label>
+        </div>
+      </div>
+
+      <!-- Инструкция для работы на фоне -->
+      <div class="bg-gradient-to-br from-slate-900 to-slate-900/60 border border-slate-800 rounded-3xl p-5 text-xs text-slate-400 space-y-2.5">
+        <h4 class="font-bold text-white flex items-center gap-1.5 text-xs">
+          <i data-lucide="lightbulb" class="w-4 h-4 text-yellow-400"></i>
+          Как использовать во время работы?
+        </h4>
+        <ul class="list-disc list-inside space-y-1.5 text-slate-300">
+          <li><strong>Режим Picture-in-Picture:</strong> нажмите кнопку «Мини-окно» сверху, чтобы вынести видео поверх рабочего стола или других вкладок.</li>
+          <li><strong>Разделение экрана:</strong> прикрепите это окно сбоку экрана (Snap / Split Screen в Windows или Mac).</li>
+          <li><strong>Фоновый звук:</strong> не закрывайте эту вкладку, звук сработает даже если вы читаете документ или пишете код.</li>
+        </ul>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Футер -->
+  <footer class="border-t border-slate-900 py-3 text-center text-xs text-slate-400">
+    Smile Monitor &copy; 2026. Вся обработка нейросетью происходит локально в вашем браузере, видео никуда не передается.
+  </footer>
+
+  <script>
+    // Инициализация Lucide иконок
+    lucide.createIcons();
+
+    // DOM Элементы
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('overlayCanvas');
+    const startCamBtn = document.getElementById('startCamBtn');
+    const startPrompt = document.getElementById('startPrompt');
+    const modelStatusText = document.getElementById('modelStatusText');
+    const modelStatusDesc = document.getElementById('modelStatusDesc');
+    const modelSpinner = document.getElementById('modelSpinner');
+    const videoWrapper = document.getElementById('videoWrapper');
+    const alertBanner = document.getElementById('alertBanner');
+    
+    const statusIndicatorDot = document.getElementById('statusIndicatorDot');
+    const statusLabel = document.getElementById('statusLabel');
+    const smileScoreBadge = document.getElementById('smileScoreBadge');
+    const liveSmileBar = document.getElementById('liveSmileBar');
+    const thresholdMarker = document.getElementById('thresholdMarker');
+    
+    const streakSecondsEl = document.getElementById('streakSeconds');
+    const totalSmiledTimeEl = document.getElementById('totalSmiledTime');
+
+    const thresholdInput = document.getElementById('thresholdInput');
+    const thresholdVal = document.getElementById('thresholdVal');
+    const targetThresholdText = document.getElementById('targetThresholdText');
+    const delayInput = document.getElementById('delayInput');
+    const delayVal = document.getElementById('delayVal');
+    const volumeInput = document.getElementById('volumeInput');
+    const volumeVal = document.getElementById('volumeVal');
+    
+    const toggleSoundBtn = document.getElementById('toggleSoundBtn');
+    const soundIcon = document.getElementById('soundIcon');
+    const soundText = document.getElementById('soundText');
+    const notificationToggle = document.getElementById('notificationToggle');
+    const meshToggle = document.getElementById('meshToggle');
+    const pipBtn = document.getElementById('pipBtn');
+
+    // Состояния
+    let isModelLoaded = false;
+    let isStreaming = false;
+    let isSoundEnabled = true;
+    let smileThreshold = 0.55;
+    let alertDelaySec = 2.5;
+    let volumeLevel = 0.7;
+    let showFaceMesh = true;
+
+    let nonSmileDuration = 0; // миллисекунды без улыбки
+    let currentStreakSec = 0; // текущая серия улыбки
+    let totalSmiledSec = 0;  // общее время улыбки
+    let lastTickTime = performance.now();
+    let isAlertActive = false;
+    let lastNotificationTime = 0;
+
+    // Web Audio API контекст для приятного или настойчивого звука без внешних файлов
+    let audioCtx = null;
+
+    function getAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return audioCtx;
+    }
+
+    // Воспроизведение короткого мелодичного или предупреждающего тона
+    function playSmileAlertSound() {
+      if (!isSoundEnabled || volumeLevel <= 0) return;
+      try {
+        const ctx = getAudioContext();
+        const now = ctx.currentTime;
+        
+        // Двухтональный мягкий сигнал "пик-пук" (напоминание)
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        osc1.type = 'sine';
+        osc1.frequency.setValueAtTime(587.33, now); // D5
+        osc1.frequency.exponentialRampToValueAtTime(440, now + 0.15); // A4
+
+        osc2.type = 'triangle';
+        osc2.frequency.setValueAtTime(880, now + 0.05);
+        osc2.frequency.exponentialRampToValueAtTime(659.25, now + 0.25);
+
+        gainNode.gain.setValueAtTime(0.001, now);
+        gainNode.gain.linearRampToValueAtTime(volumeLevel * 0.4, now + 0.03);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+        osc1.connect(gainNode);
+        osc2.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc1.start(now);
+        osc2.start(now + 0.05);
+        osc1.stop(now + 0.35);
+        osc2.stop(now + 0.35);
+      } catch (e) {
+        console.warn('Audio playback error:', e);
+      }
+    }
+
+    // Загрузка моделей face-api
+    async function loadModels() {
+      modelSpinner.classList.remove('hidden');
+      modelStatusDesc.textContent = 'Загрузка весов нейросети (TinyFace + Expressions)...';
+      
+      // Надежные CDN веса моделей vladmandic/face-api
+      const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+
+      try {
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+        
+        isModelLoaded = true;
+        modelSpinner.classList.add('hidden');
+        modelStatusDesc.textContent = 'AI модели готовы. Нажмите кнопку выше.';
+        modelStatusText.classList.replace('text-slate-400', 'text-emerald-400');
+      } catch (err) {
+        console.error('Ошибка загрузки моделей face-api:', err);
+        modelSpinner.classList.add('hidden');
+        modelStatusDesc.textContent = 'Ошибка загрузки моделей с CDN. Проверьте интернет соединение.';
+        modelStatusText.classList.replace('text-slate-400', 'text-rose-400');
+      }
+    }
+
+    // Запуск веб-камеры
+    async function startCamera() {
+      getAudioContext(); // активируем аудио по клику
+
+      if (!isModelLoaded) {
+        modelStatusDesc.textContent = 'Подождите загрузку моделей...';
+        await loadModels();
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user'
+          },
+          audio: false
+        });
+
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          video.play();
+          isStreaming = true;
+          startPrompt.classList.add('hidden');
+          setupCanvasDimensions();
+          requestAnimationFrame(detectSmileLoop);
+          setInterval(updateSessionTimer, 1000);
+        };
+      } catch (err) {
+        console.error('Доступ к камере отклонен или ошибка:', err);
+        modelStatusDesc.textContent = 'Не удалось получить доступ к веб-камере. Разрешите доступ в браузере.';
+        modelStatusText.classList.replace('text-slate-400', 'text-rose-400');
+      }
+    }
+
+    function setupCanvasDimensions() {
+      if (video.videoWidth && video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+    }
+
+    window.addEventListener('resize', () => {
+      if (isStreaming) setupCanvasDimensions();
+    });
+
+    // Основной цикл детекции
+    let isDetecting = false;
+    async function detectSmileLoop() {
+      if (!isStreaming) return;
+
+      const now = performance.now();
+      const deltaSec = (now - lastTickTime) / 1000;
+      lastTickTime = now;
+
+      const displaySize = { width: canvas.width, height: canvas.height };
+      faceapi.matchDimensions(canvas, displaySize);
+
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (!isDetecting) {
+        isDetecting = true;
+        try {
+          // Детектируем лицо и мимику (TinyFaceDetector обеспечивает максимальный FPS)
+          const detections = await faceapi
+            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
+            .withFaceLandmarks(true)
+            .withFaceExpressions();
+
+          if (detections) {
+            const resizedResult = faceapi.resizeResults(detections, displaySize);
+
+            // Отрисовка рамки или контуров лица, если включено
+            if (showFaceMesh) {
+              const box = resizedResult.detection.box;
+              ctx.strokeStyle = '#38bdf8';
+              ctx.lineWidth = 2;
+              ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+              // Легкая подсветка рта/губ
+              if (resizedResult.landmarks) {
+                const mouth = resizedResult.landmarks.getMouth();
+                ctx.beginPath();
+                ctx.strokeStyle = '#f59e0b';
+                ctx.lineWidth = 3;
+                mouth.forEach((pt, i) => {
+                  if (i === 0) ctx.moveTo(pt.x, pt.y);
+                  else ctx.lineTo(pt.x, pt.y);
+                });
+                ctx.closePath();
+                ctx.stroke();
+              }
+            }
+
+            // Получаем уровень счастья (улыбки)
+            const happyScore = resizedResult.expressions.happy || 0;
+            const smilePercent = Math.round(happyScore * 100);
+
+            // Обновляем индикаторы в интерфейсе
+            smileScoreBadge.textContent = `${smilePercent}%`;
+            liveSmileBar.style.width = `${Math.min(100, smilePercent)}%`;
+
+            if (happyScore >= smileThreshold) {
+              // Пользователь улыбается!
+              handleSmilingState(deltaSec, smilePercent);
+            } else {
+              // Пользователь не улыбается или нейтрален
+              handleNotSmilingState(deltaSec, smilePercent);
+            }
+          } else {
+            // Лицо не видно в кадре
+            handleNoFaceState();
+          }
+        } catch (e) {
+          console.warn('Detection cycle error:', e);
+        } finally {
+          isDetecting = false;
+        }
+      }
+
+      requestAnimationFrame(detectSmileLoop);
+    }
+
+    // Состояние: улыбается
+    function handleSmilingState(deltaSec, percent) {
+      nonSmileDuration = 0;
+      currentStreakSec += deltaSec;
+      streakSecondsEl.textContent = Math.floor(currentStreakSec);
+
+      statusIndicatorDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-md shadow-emerald-400/50';
+      statusLabel.textContent = 'Отличная улыбка! 😊';
+      statusLabel.className = 'text-emerald-400 font-semibold';
+
+      // Прячем тревогу, если была
+      if (isAlertActive) {
+        hideAlert();
+      }
+    }
+
+    // Состояние: не улыбается
+    function handleNotSmilingState(deltaSec, percent) {
+      currentStreakSec = 0;
+      streakSecondsEl.textContent = '0';
+      nonSmileDuration += deltaSec;
+
+      statusIndicatorDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+      statusLabel.textContent = 'Не улыбаешься... 😐';
+      statusLabel.className = 'text-amber-400 font-medium';
+
+      // Превышен ли порог тишины?
+      if (nonSmileDuration >= alertDelaySec) {
+        triggerAlert();
+      }
+    }
+
+    // Состояние: лицо потеряно
+    function handleNoFaceState() {
+      smileScoreBadge.textContent = '0%';
+      liveSmileBar.style.width = '0%';
+      statusIndicatorDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
+      statusLabel.textContent = 'Лицо не обнаружено';
+      statusLabel.className = 'text-slate-400';
+    }
+
+    // Активация предупреждения
+    function triggerAlert() {
+      if (!isAlertActive) {
+        isAlertActive = true;
+        alertBanner.classList.remove('opacity-0', 'pointer-events-none', '-translate-y-4');
+        alertBanner.classList.add('opacity-100', 'translate-y-0');
+        videoWrapper.classList.add('shake-anim', 'border-rose-500/80');
+
+        setTimeout(() => {
+          videoWrapper.classList.remove('shake-anim');
+        }, 500);
+
+        playSmileAlertSound();
+        sendPushNotification();
+      } else {
+        // Повторный ненавязчивый звук каждые 3 секунды, если упорно не улыбается
+        if (Math.floor(nonSmileDuration) % 3 === 0 && Math.floor(nonSmileDuration) > 0) {
+          playSmileAlertSound();
+        }
+      }
+    }
+
+    // Скрытие предупреждения
+    function hideAlert() {
+      isAlertActive = false;
+      alertBanner.classList.add('opacity-0', 'pointer-events-none', '-translate-y-4');
+      alertBanner.classList.remove('opacity-100', 'translate-y-0');
+      videoWrapper.classList.remove('border-rose-500/80');
+    }
+
+    // Браузерные пуш-уведомления
+    function sendPushNotification() {
+      if (notificationToggle.checked && Notification.permission === 'granted') {
+        const now = Date.now();
+        // Ограничиваем не чаще одного раза в 8 секунд
+        if (now - lastNotificationTime > 8000) {
+          lastNotificationTime = now;
+          new Notification('Улыбнись! 😊', {
+            body: 'Пора поднять уголки губ и зарядиться позитивом!',
+            icon: 'https://em-content.zobj.net/source/apple/354/grinning-face-with-smiling-eyes_1f604.png',
+            silent: true // звук проигрываем через Web Audio API
+          });
+        }
+      }
+    }
+
+    // Таймер суммарного времени улыбки
+    function updateSessionTimer() {
+      if (isStreaming && currentStreakSec > 0) {
+        totalSmiledSec++;
+        const mins = Math.floor(totalSmiledSec / 60);
+        const secs = totalSmiledSec % 60;
+        totalSmiledTimeEl.textContent = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+      }
+    }
+
+    // Элементы управления и события
+    startCamBtn.addEventListener('click', startCamera);
+
+    // Порог улыбки
+    thresholdInput.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      smileThreshold = val / 100;
+      thresholdVal.textContent = `${val}%`;
+      targetThresholdText.textContent = `Цель: ≥ ${val}%`;
+      thresholdMarker.style.left = `${val}%`;
+    });
+
+    // Задержка тревоги
+    delayInput.addEventListener('input', (e) => {
+      alertDelaySec = parseFloat(e.target.value);
+      delayVal.textContent = `${alertDelaySec.toFixed(1)} с`;
+    });
+
+    // Громкость
+    volumeInput.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      volumeLevel = val / 100;
+      volumeVal.textContent = `${val}%`;
+      if (val === 0) {
+        isSoundEnabled = false;
+        soundIcon.setAttribute('data-lucide', 'volume-x');
+        soundText.textContent = 'Звук: Выкл';
+      } else {
+        isSoundEnabled = true;
+        soundIcon.setAttribute('data-lucide', 'volume-2');
+        soundText.textContent = 'Звук: Вкл';
+      }
+      lucide.createIcons();
+    });
+
+    // Кнопка включения/выключения звука в шапке
+    toggleSoundBtn.addEventListener('click', () => {
+      isSoundEnabled = !isSoundEnabled;
+      if (isSoundEnabled) {
+        if (volumeLevel === 0) volumeLevel = 0.7;
+        volumeInput.value = Math.round(volumeLevel * 100);
+        volumeVal.textContent = `${Math.round(volumeLevel * 100)}%`;
+        soundIcon.setAttribute('data-lucide', 'volume-2');
+        soundIcon.classList.replace('text-rose-400', 'text-emerald-400');
+        soundText.textContent = 'Звук: Вкл';
+        playSmileAlertSound(); // проверочный звук
+      } else {
+        soundIcon.setAttribute('data-lucide', 'volume-x');
+        soundIcon.classList.replace('text-emerald-400', 'text-rose-400');
+        soundText.textContent = 'Звук: Выкл';
+      }
+      lucide.createIcons();
+    });
+
+    // Запрос разрешения на браузерные уведомления
+    notificationToggle.addEventListener('change', async (e) => {
+      if (e.target.checked) {
+        if ('Notification' in window) {
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') {
+            e.target.checked = false;
+          }
+        } else {
+          e.target.checked = false;
+        }
+      }
+    });
+
+    // Сетка лица
+    meshToggle.addEventListener('change', (e) => {
+      showFaceMesh = e.target.checked;
+    });
+
+    // Картинка-в-картинке (PiP)
+    if ('pictureInPictureEnabled' in document) {
+      pipBtn.addEventListener('click', async () => {
+        try {
+          if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+          } else if (video.readyState >= 2) {
+            await video.requestPictureInPicture();
+          }
+        } catch (err) {
+          console.error('Ошибка перехода в PiP:', err);
+        }
+      });
+    } else {
+      pipBtn.classList.add('hidden');
+    }
+
+    // Предзагрузка моделей при запуске страницы
+    window.addEventListener('DOMContentLoaded', () => {
+      loadModels();
+    });
+  </script>
+</body>
+</html>
